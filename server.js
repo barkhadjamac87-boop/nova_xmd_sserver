@@ -52,9 +52,13 @@ let latestQrDataUrl = null;
 let qrTimestamp = 0;
 let qrWaitingResolvers = [];
 
-// Ensure sessions directory exists
-if (!fs.existsSync(config.sessionDir)) {
-  fs.mkdirSync(config.sessionDir, { recursive: true });
+// Ensure sessions directory exists safely (resilient to serverless / read-only filesystem)
+try {
+  if (!fs.existsSync(config.sessionDir)) {
+    fs.mkdirSync(config.sessionDir, { recursive: true });
+  }
+} catch (err) {
+  console.warn('[NOVA XMD] Notice: sessionDir not writable at startup:', err.message);
 }
 
 /**
@@ -793,23 +797,33 @@ app.post(['/api/restart', '/api/reconnect'], async (req, res) => {
   }
 });
 
-// Start HTTP Server
-app.listen(config.port, () => {
-  console.log(`\n======================================================`);
-  console.log(`⚡ NOVA XMD Server & WhatsApp API running on:`);
-  console.log(`🌐 Website URL:  http://localhost:${config.port}`);
-  console.log(`📡 Pairing API:  http://localhost:${config.port}/api/pair?phone=615123456&country=252`);
-  console.log(`======================================================\n`);
+// Check if running in a Serverless Environment (Vercel, AWS Lambda)
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
-  // Auto-reconnect if session exists
-  const credsPath = path.join(config.sessionDir, 'creds.json');
-  if (fs.existsSync(credsPath)) {
+// Start HTTP Server when running as a standalone persistent service
+if (!isServerless) {
+  app.listen(config.port, () => {
+    console.log(`\n======================================================`);
+    console.log(`⚡ NOVA XMD Server & WhatsApp API running on:`);
+    console.log(`🌐 Website URL:  http://localhost:${config.port}`);
+    console.log(`📡 Pairing API:  http://localhost:${config.port}/api/pair?phone=615123456&country=252`);
+    console.log(`======================================================\n`);
+
+    // Auto-reconnect if session exists
     try {
-      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-      if (creds && creds.registered) {
-        console.log('[NOVA XMD] Session hore ayaa laga helay folder-ka "sessions"! Auto-reconnecting...');
-        initWhatsAppSocket();
+      const credsPath = path.join(config.sessionDir, 'creds.json');
+      if (fs.existsSync(credsPath)) {
+        const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+        if (creds && creds.registered) {
+          console.log('[NOVA XMD] Session hore ayaa laga helay folder-ka "sessions"! Auto-reconnecting...');
+          initWhatsAppSocket();
+        }
       }
-    } catch (e) {}
-  }
-});
+    } catch (e) {
+      console.warn('[NOVA XMD] Session auto-reconnect error:', e.message);
+    }
+  });
+}
+
+// Export Express app for Vercel Serverless Functions
+export default app;

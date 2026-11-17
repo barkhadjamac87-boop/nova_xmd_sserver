@@ -1,0 +1,33 @@
+# Dependencies (Never commit node_modules, let Vercel/server run npm install on Linux)
+node_modules/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# WhatsApp Sessions & Auth Credentials (Never expose or commit to GitHub)
+session/
+sessions/
+*.session
+creds.json
+session-*.json
+app-state-sync-*.json
+pre-key-*.json
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Vercel & IDE
+.vercel
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log

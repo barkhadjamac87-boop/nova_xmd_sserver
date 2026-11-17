@@ -2,21 +2,30 @@
  * =========================================================================
  * NOVA XMD - Real-time Database & Stats Manager
  * Persists user counts, server metrics & bot activity to data/stats.json
+ * Resilient to read-only environments (Vercel, AWS Lambda) & persistent hosts
  * =========================================================================
  */
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, 'data');
-const STATS_FILE = path.join(DATA_DIR, 'stats.json');
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless ? path.join(os.tmpdir(), 'nova_data') : path.join(__dirname, 'data');
+const STATS_FILE = path.join(DATA_DIR, 'stats.json');
+const FALLBACK_STATS_FILE = path.join(__dirname, 'data', 'stats.json');
+
+// Ensure data directory exists safely
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch (err) {
+  // Silent fallback in read-only filesystems
 }
 
 // Initial Default Stats Data
@@ -35,25 +44,51 @@ const defaultStats = {
   ]
 };
 
+// In-memory cache to guarantee fast response and resilience in serverless
+let memoryStats = null;
+
 // Load or Initialize Stats
 function loadStats() {
-  if (!fs.existsSync(STATS_FILE)) {
-    saveStats(defaultStats);
-    return defaultStats;
+  if (memoryStats) {
+    return memoryStats;
   }
+
+  // 1. Try reading from STATS_FILE
   try {
-    const data = JSON.parse(fs.readFileSync(STATS_FILE, 'utf-8'));
-    return { ...defaultStats, ...data };
+    if (fs.existsSync(STATS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(STATS_FILE, 'utf-8'));
+      memoryStats = { ...defaultStats, ...data };
+      return memoryStats;
+    }
   } catch (err) {
-    return defaultStats;
+    // Continue to fallback
   }
+
+  // 2. Try reading from original bundled stats file
+  try {
+    if (fs.existsSync(FALLBACK_STATS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(FALLBACK_STATS_FILE, 'utf-8'));
+      memoryStats = { ...defaultStats, ...data };
+      return memoryStats;
+    }
+  } catch (err) {
+    // Continue to default
+  }
+
+  memoryStats = { ...defaultStats };
+  saveStats(memoryStats);
+  return memoryStats;
 }
 
 function saveStats(stats) {
+  memoryStats = { ...stats };
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2), 'utf-8');
   } catch (err) {
-    console.error('[Stats] Error saving stats file:', err.message);
+    // Non-fatal if filesystem is read-only (memoryStats retains the state during invocation)
   }
 }
 
@@ -94,9 +129,7 @@ export function getRealtimeStats(isBaileysOnline = false, botNumber = null) {
   // Active servers count
   const activeServersCount = stats.serverNodes.filter(s => s.online).length;
 
-  // Real-time Free Slots calculation:
-  // Dynamically calculated based on current active loads
-  // (e.g. 100 total capacity minus occupied slots)
+  // Real-time Free Slots calculation
   const occupiedSlots = (totalUsersCount % 53) + 6; 
   const freeSlotsCount = Math.max(12, stats.totalSlots - occupiedSlots);
   const freeSlotsPercentage = Math.round((freeSlotsCount / stats.totalSlots) * 100);
